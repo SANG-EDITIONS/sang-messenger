@@ -9,18 +9,22 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Security Configuration (For demonstration; use a persistent 32-byte key in production)
-const ENCRYPTION_KEY = crypto.randomBytes(32); 
-const IV_LENGTH = 12; // For AES-256-GCM
+// PRODUCTION FIX: Static key for AES-256-GCM so old messages can decrypt after restart
+const ENCRYPTION_KEY = crypto.scryptSync('SangEditionsSecureKey2026!', 'salt', 32); 
+const IV_LENGTH = 12;
 
-// Initialize Database
-const db = new sqlite3.Database(':memory:', (err) => {
+// CLINICAL LOGIN CREDENTIALS (Change these to whatever you want!)
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "Password123!"; 
+
+// PRODUCTION FIX: Persistent file database instead of ':memory:'
+const db = new sqlite3.Database(path.join(__dirname, 'database.sqlite'), (err) => {
     if (err) console.error(err.message);
-    console.log('Connected to secure in-memory triage database.');
+    console.log('Connected to secure persistent database.');
 });
 
 db.serialize(() => {
-    db.run(`CREATE TABLE triage_records (
+    db.run(`CREATE TABLE IF NOT EXISTS triage_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         patient_name TEXT,
         encrypted_symptoms TEXT,
@@ -29,7 +33,7 @@ db.serialize(() => {
         priority TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
-    db.run(`CREATE TABLE messages (
+    db.run(`CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         sender TEXT,
         encrypted_text TEXT,
@@ -39,7 +43,7 @@ db.serialize(() => {
     )`);
 });
 
-// Encryption Helper Functions
+// Encryption Helpers
 function encrypt(text) {
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
@@ -50,33 +54,46 @@ function encrypt(text) {
 }
 
 function decrypt(encryptedData, ivHex, tagHex) {
-    const iv = Buffer.from(ivHex, 'hex');
-    const tag = Buffer.from(tagHex, 'hex');
-    const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
-    decipher.setAuthTag(tag);
-    let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
+    try {
+        const iv = Buffer.from(ivHex, 'hex');
+        const tag = Buffer.from(tagHex, 'hex');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+        decipher.setAuthTag(tag);
+        let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    } catch (e) {
+        return "[Decryption Error]";
+    }
 }
 
-// Automated Triage Rule Engine
 function assessPriority(symptoms) {
     const urgentKeywords = ['chest pain', 'shortness of breath', 'severe bleeding', 'unconscious', 'stroke', 'suicidal'];
     const lowerSymptoms = symptoms.toLowerCase();
     return urgentKeywords.some(keyword => lowerSymptoms.includes(keyword)) ? 'URGENT' : 'ROUTINE';
 }
 
+app.use(express.json());
+
+// Secure Login Route
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+        res.json({ success: true, token: "clinician-authorized-session" });
+    } else {
+        res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+});
+
 // Serve Frontend Static Files
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(express.json());
 
 // WebSocket Live Sync & Chat Connection
 wss.on('connection', (ws) => {
-    console.log('Authorized clinical interface node connected.');
+    console.log('Node connected.');
 
-    // Fetch and send existing database state upon connection
     db.all(`SELECT * FROM triage_records ORDER BY timestamp DESC`, [], (err, rows) => {
-        if (!err) {
+        if (!err && rows) {
             const clearRows = rows.map(row => ({
                 id: row.id,
                 patient_name: row.patient_name,
@@ -89,7 +106,7 @@ wss.on('connection', (ws) => {
     });
 
     db.all(`SELECT * FROM messages ORDER BY timestamp ASC`, [], (err, rows) => {
-        if (!err) {
+        if (!err && rows) {
             const clearMessages = rows.map(row => ({
                 sender: row.sender,
                 text: decrypt(row.encrypted_text, row.iv, row.tag),
@@ -99,7 +116,6 @@ wss.on('connection', (ws) => {
         }
     });
 
-    // Handle Incoming Actions
     ws.on('message', (message) => {
         const payload = JSON.parse(message);
 
@@ -140,11 +156,7 @@ wss.on('connection', (ws) => {
     });
 });
 
-// Run Server
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`=================================================`);
-    console.log(` SANG EDITIONS MESSENGER SERVER RUNNING`);
-    console.log(` Local Access Link: http://localhost:${PORT}`);
-    console.log(`=================================================`);
+    console.log(`SANG EDITIONS SERVER RUNNING ON PORT ${PORT}`);
 });

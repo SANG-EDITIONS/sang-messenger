@@ -4,108 +4,98 @@ const WebSocket = require('ws');
 const path = require('path');
 
 const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Mock Credentials for Clinician Login
-const CLINICIAN_USER = "drsang";
-const CLINICIAN_PASS = "secure123";
-
-// Real-time server storage lists
-let triageQueue = [];
-let chatMessages = [];
-let activeConnections = new Set();
-
-app.post('/api/login', (req, res) => {
-    const { username, password } = req.body;
-    if (username === CLINICIAN_USER && password === CLINICIAN_PASS) {
-        return res.json({ success: true });
-    }
-    return res.status(401).json({ success: false, error: "Unauthorized Identity" });
-});
-
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// PREFERRED CLINICIAN CREDENTIALS
+const CLINICIAN_USER = "drsang";
+const CLINICIAN_PASS = "secure123";
+
+// In-memory clinical data stores
+let triageQueue = [];
+let conversationLogs = {}; 
+
+// Secure Authentication Endpoint
+app.post('/api/login', (req, { username, password }, res) => {
+    if (username === CLINICIAN_USER && password === CLINICIAN_PASS) {
+        return res.json({ success: true, message: "Authorized" });
+    }
+    return res.status(401).json({ success: false, message: "Invalid Parameters" });
+});
+
+// Serve Frontend App Layout
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Live WebSocket Communication Engine
 wss.on('connection', (ws) => {
-    activeConnections.add(ws);
-
     ws.on('message', (message) => {
-        let payload;
         try {
-            payload = JSON.parse(message);
-        } catch (e) {
-            return;
-        }
+            const payload = JSON.parse(message);
 
-        // 1. Clinician requests the global queue
-        if (payload.type === 'GET_CLINICAL_QUEUE') {
-            ws.userRole = 'clinician';
-            ws.send(JSON.stringify({ type: 'INITIAL_TRIAGE_LOAD', data: triageQueue }));
-        }
+            if (payload.type === 'GET_CLINICAL_QUEUE') {
+                ws.send(JSON.stringify({ type: 'INITIAL_TRIAGE_LOAD', data: triageQueue }));
+            }
 
-        // 2. Patient submits an intake form
-        if (payload.type === 'NEW_TRIAGE') {
-            const newPatientId = 'p-' + Math.random().toString(36).substr(2, 9);
-            ws.userRole = 'patient';
-            ws.patientRoomId = newPatientId;
+            if (payload.type === 'NEW_TRIAGE') {
+                const newPatientId = 'p_' + Date.now();
+                const triageItem = {
+                    id: newPatientId,
+                    patient_name: payload.name,
+                    symptoms: payload.symptoms,
+                    priority: payload.symptoms.toLowerCase().includes('pain') || payload.symptoms.toLowerCase().includes('severe') ? 'URGENT' : 'ROUTINE',
+                    timestamp: new Date()
+                };
 
-            const triageItem = {
-                id: newPatientId,
-                patient_name: payload.name,
-                symptoms: payload.symptoms,
-                priority: "ROUTINE",
-                timestamp: new Date()
-            };
+                triageQueue.push(triageItem);
+                conversationLogs[newPatientId] = [];
 
-            triageQueue.push(triageItem);
+                ws.send(JSON.stringify({ type: 'INTAKE_CONFIRMED', patientId: newPatientId }));
+                
+                // Broadcast update to connected clinician portals
+                wss.clients.forEach(client => {
+                    if (client !== ws && client.readyState === WebSocket.OPEN) {
+                        client.send(JSON.stringify({ type: 'NEW_TRIAGE_ADDED', data: triageItem }));
+                    }
+                });
+            }
 
-            // Confirm back to this exact patient device
-            ws.send(JSON.stringify({ type: 'INTAKE_CONFIRMED', patientId: newPatientId }));
+            if (payload.type === 'LOAD_PRIVATE_CHAT') {
+                const logs = conversationLogs[payload.patientId] || [];
+                ws.send(JSON.stringify({ type: 'INITIAL_CHAT_LOAD', patientId: payload.patientId, data: logs }));
+            }
 
-            // Broadcast new patient card to any logged-in clinicians instantly
-            activeConnections.forEach(client => {
-                if (client.readyState === WebSocket.OPEN && client.userRole === 'clinician') {
-                    client.send(JSON.stringify({ type: 'NEW_TRIAGE_ADDED', data: triageItem }));
+            if (payload.type === 'CHAT_MESSAGE') {
+                const msgObj = {
+                    patient_id: payload.patientId,
+                    sender: payload.sender, // 'Clinician' or 'Patient'
+                    text: payload.text,
+                    timestamp: new Date()
+                };
+
+                if (!conversationLogs[payload.patientId]) {
+                    conversationLogs[payload.patientId] = [];
                 }
-            });
-        }
+                conversationLogs[payload.patientId].push(msgObj);
 
-        // 3. Requesting chat history for an isolated room
-        if (payload.type === 'LOAD_PRIVATE_CHAT') {
-            const roomLogs = chatMessages.filter(m => m.patient_id === payload.patientId);
-            ws.send(JSON.stringify({ type: 'INITIAL_CHAT_LOAD', data: roomLogs, patientId: payload.patientId }));
-        }
-
-        // 4. Two-Way WhatsApp Message Relay
-        if (payload.type === 'CHAT_MESSAGE') {
-            const msgObj = {
-                patient_id: payload.patientId,
-                sender: payload.sender, // 'Clinician' or 'Patient'
-                text: payload.text,
-                timestamp: new Date()
-            };
-
-            chatMessages.push(msgObj);
-
-            // Broadcast to the exact patient and clinician looking at this room
-            activeConnections.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    const isTargetClinician = (client.userRole === 'clinician');
-                    const isTargetPatient = (client.userRole === 'patient' && client.patientRoomId === payload.patientId);
-                    
-                    if (isTargetClinician || isTargetPatient) {
+                // Broadcast live chat message back to the active pair
+                wss.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify({ type: 'NEW_CHAT_MESSAGE', data: msgObj }));
                     }
-                }
-            });
+                });
+            }
+        } catch (e) {
+            console.error("Payload processing error", e);
         }
-    });
-
-    ws.on('close', () => {
-        activeConnections.delete(ws);
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Secure Server Active on Port ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`SANG Messenger Server running on port ${PORT}`);
+});

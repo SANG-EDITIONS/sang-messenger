@@ -35,8 +35,20 @@
         .login-box button { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
         .error-msg { color: var(--urgent); font-size: 0.85rem; margin-top: 10px; display: none; text-align: center; }
 
-        /* Patient Interface Container */
-        .patient-view-container { display: none; width: 100%; max-width: 600px; margin: 40px auto; background: white; border: 1px solid var(--border-color); border-radius: 12px; flex-direction: column; height: calc(100vh - 80px); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        /* Patient Interface Container - Raised for Mobile Viewports */
+        .patient-view-container { 
+            display: none; 
+            width: 100%; 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: white; 
+            border-left: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+            flex-direction: column; 
+            height: 100vh; 
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); 
+        }
+        
         .patient-intake-box { padding: 30px; display: flex; flex-direction: column; gap: 15px; justify-content: center; height: 100%; }
         .patient-intake-box input { padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 1rem; }
         .patient-intake-box button { padding: 12px; background: var(--routine); color: white; font-weight: 600; border: none; border-radius: 6px; cursor: pointer; }
@@ -61,10 +73,9 @@
         .messages-log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; background: #fafafa; }
         .msg-bubble { max-width: 70%; padding: 10px 14px; border-radius: 12px; font-size: 0.92rem; line-height: 1.4; }
         
-        /* Message color mapping based on who is viewing */
+        /* Message side variations */
         .msg-bubble.sent { background: var(--primary); color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; }
         .patient-view-container .msg-bubble.sent { background: var(--routine); }
-        
         .msg-bubble.received { background: #e2e8f0; color: var(--text-main); align-self: flex-start; border-bottom-left-radius: 2px; }
         
         .msg-meta { font-size: 0.7rem; color: rgba(255,255,255,0.7); margin-top: 4px; text-align: right; }
@@ -73,6 +84,13 @@
         .chat-input-bar { padding: 15px 20px; border-top: 1px solid var(--border-color); background: #fff; display: flex; gap: 10px; }
         .chat-input-bar input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; }
         .chat-input-bar button { padding: 12px 24px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
+        
+        /* Elevates the input panel for patients on mobile devices safely above browser bars */
+        .patient-view-container .chat-input-bar {
+            padding: 15px 20px 32px 20px; 
+            background: #ffffff;
+        }
+        
         .placeholder-workspace { flex:1; display:flex; align-items:center; justify-content:center; color: var(--text-muted); font-size: 0.95rem; }
     </style>
 </head>
@@ -171,6 +189,7 @@
         document.getElementById('loginWall').style.display = 'flex';
     }
 
+    // Connect right away upon clicking Check-In
     function showPatientIntake() {
         document.getElementById('portalChoiceGate').style.display = 'none';
         document.getElementById('patientAppLayout').style.display = 'flex';
@@ -291,7 +310,6 @@
         const log = document.getElementById(containerId);
         const bubble = document.createElement('div');
         
-        // Dynamically style based on who is viewing the chat bubble
         let visualSide = 'received';
         if (userRole === 'clinician' && data.sender === 'Clinician') visualSide = 'sent';
         if (userRole === 'patient' && data.sender === 'Patient') visualSide = 'sent';

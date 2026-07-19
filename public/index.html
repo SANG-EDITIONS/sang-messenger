@@ -60,10 +60,16 @@
         .chat-header { padding: 15px 20px; border-bottom: 1px solid var(--border-color); background: #fff; }
         .messages-log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; background: #fafafa; }
         .msg-bubble { max-width: 70%; padding: 10px 14px; border-radius: 12px; font-size: 0.92rem; line-height: 1.4; }
-        .msg-bubble.clinician { background: var(--primary); color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; }
-        .msg-bubble.client { background: #e2e8f0; color: var(--text-main); align-self: flex-start; border-bottom-left-radius: 2px; }
+        
+        /* Message color mapping based on who is viewing */
+        .msg-bubble.sent { background: var(--primary); color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .patient-view-container .msg-bubble.sent { background: var(--routine); }
+        
+        .msg-bubble.received { background: #e2e8f0; color: var(--text-main); align-self: flex-start; border-bottom-left-radius: 2px; }
+        
         .msg-meta { font-size: 0.7rem; color: rgba(255,255,255,0.7); margin-top: 4px; text-align: right; }
-        .msg-bubble.client .msg-meta { color: var(--text-muted); }
+        .msg-bubble.received .msg-meta { color: var(--text-muted); }
+        
         .chat-input-bar { padding: 15px 20px; border-top: 1px solid var(--border-color); background: #fff; display: flex; gap: 10px; }
         .chat-input-bar input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; }
         .chat-input-bar button { padding: 12px 24px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
@@ -110,7 +116,7 @@
         <input type="text" id="intakeSymptoms" placeholder="What symptoms are you experiencing?">
         <button onclick="submitPatientIntake()">Open Private Chat Room</button>
     </div>
-    <!-- Hidden until patient submits intake form, showing ONLY their chat -->
+    
     <div class="chat-area" id="patientChatArea" style="height:100%;">
         <div class="chat-header" style="background: var(--bg-primary);">
             <span style="font-weight:700;" id="patientRoomHeader">Secure Channel</span>
@@ -118,7 +124,7 @@
         </div>
         <div class="messages-log" id="patientMsgLog"></div>
         <div class="chat-input-bar">
-            <input type="text" id="patientChatInput" placeholder="Type a message to the clinician..." onkeypress="handlePatientKeyPress(event)">
+            <input type="text" id="patientChatInput" placeholder="Type a message to DrSang..." onkeypress="handlePatientKeyPress(event)">
             <button style="background: var(--routine);" onclick="sendPatientMessage()">Send Private</button>
         </div>
     </div>
@@ -153,9 +159,9 @@
 
 <script>
     let ws;
-    let userRole = null; // 'clinician' or 'patient'
-    let myPatientRoomId = null; // Assigned only if role is patient
-    let activePatientId = null; // Tracked by clinician inside layout
+    let userRole = null; 
+    let myPatientRoomId = null; 
+    let activePatientId = null; 
     
     const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
     const wsUrl = wsProtocol + window.location.host;
@@ -209,7 +215,6 @@
                 document.getElementById('connection-status').innerText = 'Clinical Portal Secure';
                 document.getElementById('connection-status').style.background = '#e6f4ea';
                 document.getElementById('connection-status').style.color = '#137333';
-                // Request master index records
                 ws.send(JSON.stringify({ type: 'GET_CLINICAL_QUEUE' }));
             }
         };
@@ -226,7 +231,7 @@
                 myPatientRoomId = payload.patientId;
                 document.getElementById('intakeFormContainer').style.display = 'none';
                 document.getElementById('patientChatArea').style.display = 'flex';
-                document.getElementById('patientRoomHeader').innerText = `Secure Chat Room - ID: ${payload.patientId}`;
+                document.getElementById('patientRoomHeader').innerText = `Secure Consultation with Dr. Sang`;
                 ws.send(JSON.stringify({ type: 'LOAD_PRIVATE_CHAT', patientId: myPatientRoomId }));
             }
 
@@ -286,12 +291,16 @@
         const log = document.getElementById(containerId);
         const bubble = document.createElement('div');
         
-        const isClinician = data.sender === 'Clinician';
-        bubble.className = `msg-bubble ${isClinician ? 'clinician' : 'client'}`;
+        // Dynamically style based on who is viewing the chat bubble
+        let visualSide = 'received';
+        if (userRole === 'clinician' && data.sender === 'Clinician') visualSide = 'sent';
+        if (userRole === 'patient' && data.sender === 'Patient') visualSide = 'sent';
+
+        bubble.className = `msg-bubble ${visualSide}`;
         const timeStr = new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         bubble.innerHTML = `
-            <strong>${data.sender}:</strong> ${data.text}
+            <strong>${data.sender === 'Clinician' ? 'Dr. Sang' : 'You'}:</strong> ${data.text}
             <div class="msg-meta">${timeStr}</div>
         `;
         log.appendChild(bubble);

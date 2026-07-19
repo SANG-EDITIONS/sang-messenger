@@ -1,0 +1,14 @@
+{
+  "name": "sang-editions-messenger",
+  "version": "1.0.0",
+  "description": "Secure Clinical Triage and Record Management Platform",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.7",
+    "ws": "^8.16.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

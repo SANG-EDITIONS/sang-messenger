@@ -17,7 +17,6 @@
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         
-        /* Mobile friendly base container setup */
         html, body { 
             background-color: var(--bg-primary); 
             color: var(--text-main); 
@@ -43,7 +42,7 @@
         .login-box button { width: 100%; padding: 12px; background: var(--primary); color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; }
         .error-msg { color: var(--urgent); font-size: 0.85rem; margin-top: 10px; display: none; text-align: center; }
 
-        /* Patient Interface Container - Optimized for Mobile Screen Height */
+        /* Patient Interface Container */
         .patient-view-container { 
             display: none; 
             width: 100%; 
@@ -86,7 +85,6 @@
         .msg-meta { font-size: 0.7rem; color: rgba(255,255,255,0.7); margin-top: 4px; text-align: right; }
         .msg-bubble.received .msg-meta { color: var(--text-muted); }
         
-        /* High-visibility safe input bar styling for mobile browser frames */
         .chat-input-bar { 
             padding: 12px 15px; 
             border-top: 1px solid var(--border-color); 
@@ -95,13 +93,14 @@
             gap: 10px; 
             align-items: center;
         }
-        .chat-input-bar input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 16px; /* Prevents iOS auto-zoom on input */ }
+        .chat-input-bar input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 16px; }
         .chat-input-bar button { padding: 12px 20px; background: var(--primary); color: #fff; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; white-space: nowrap; }
         
-        /* Raised padded zone strictly for the patient's view container bottom safety */
+        /* STRICT FIX FOR MOBILE SYSTEM OVERLAY OVERLAPPING */
         .patient-view-container .chat-input-bar {
-            padding-bottom: 25px;
-            background: #f1f5f9;
+            padding-bottom: 85px !important; /* Forces the box up to the level of the green arrow */
+            background: #ffffff;
+            border-top: 1px solid var(--border-color);
         }
         
         .placeholder-workspace { flex:1; display:flex; align-items:center; justify-content:center; color: var(--text-muted); font-size: 0.95rem; }
@@ -370,6 +369,12 @@
         }));
         input.value = '';
     }
+
+    // Auto-scroll on resize events (like keyboard opening)
+    window.addEventListener('resize', () => {
+        const activeLog = userRole === 'clinician' ? document.getElementById('msgLog') : document.getElementById('patientMsgLog');
+        if(activeLog) activeLog.scrollTop = activeLog.scrollHeight;
+    });
 
     function handleClinicianKeyPress(e) { if (e.key === 'Enter') sendClinicianMessage(); }
     function handlePatientKeyPress(e) { if (e.key === 'Enter') sendPatientMessage(); }

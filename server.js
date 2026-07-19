@@ -1,127 +1,111 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Connect to persistent SQLite database
-const db = new sqlite3.Database(path.join(__dirname, 'database.sqlite'), (err) => {
-    if (err) console.error(err.message);
-    console.log('Connected to secure medical database.');
-});
+// Mock Credentials for Clinician Login
+const CLINICIAN_USER = "drsang";
+const CLINICIAN_PASS = "secure123";
 
-// Enforce strict relational tables
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS triage (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        patient_name TEXT,
-        symptoms TEXT,
-        priority TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+// Real-time server storage lists
+let triageQueue = [];
+let chatMessages = [];
+let activeConnections = new Set();
 
-    db.run(`CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        patient_id INTEGER,
-        sender TEXT,
-        text TEXT,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-});
-
-// Secure Portal Authentication Endpoint
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
-    if (username === 'admin' && password === 'Password123!') {
+    if (username === CLINICIAN_USER && password === CLINICIAN_PASS) {
         return res.json({ success: true });
     }
-    res.status(401).json({ success: false, message: 'Unauthorized access attempt.' });
+    return res.status(401).json({ success: false, error: "Unauthorized Identity" });
 });
 
-// WebSocket Connection Management
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
 wss.on('connection', (ws) => {
+    activeConnections.add(ws);
+
     ws.on('message', (message) => {
-        const payload = JSON.parse(message);
+        let payload;
+        try {
+            payload = JSON.parse(message);
+        } catch (e) {
+            return;
+        }
 
-        // CLINICIAN ACTION: Authorized portal requests the complete queue
+        // 1. Clinician requests the global queue
         if (payload.type === 'GET_CLINICAL_QUEUE') {
-            db.all("SELECT * FROM triage ORDER BY id DESC", [], (err, rows) => {
-                if (!err) ws.send(JSON.stringify({ type: 'INITIAL_TRIAGE_LOAD', data: rows }));
-            });
+            ws.userRole = 'clinician';
+            ws.send(JSON.stringify({ type: 'INITIAL_TRIAGE_LOAD', data: triageQueue }));
         }
 
-        // CLINICIAN OR PATIENT ACTION: Request isolated history for one specific room ID
-        if (payload.type === 'LOAD_PRIVATE_CHAT') {
-            db.all("SELECT * FROM messages WHERE patient_id = ? ORDER BY timestamp ASC", [payload.patientId], (err, rows) => {
-                if (!err) {
-                    ws.send(JSON.stringify({ type: 'INITIAL_CHAT_LOAD', data: rows, patientId: payload.patientId }));
-                }
-            });
-        }
-
-        // PATIENT ACTION: Submit a new intake form
+        // 2. Patient submits an intake form
         if (payload.type === 'NEW_TRIAGE') {
-            const priority = payload.symptoms.toLowerCase().includes('chest pain') ? 'URGENT' : 'ROUTINE';
-            
-            db.run("INSERT INTO triage (patient_name, symptoms, priority) VALUES (?, ?, ?)", 
-                [payload.name, payload.symptoms, priority], 
-                function(err) {
-                    if (!err) {
-                        const newTriageId = this.lastID;
-                        
-                        // Send the generated unique session ID back to the patient so they lock into their private room
-                        ws.send(JSON.stringify({ 
-                            type: 'INTAKE_CONFIRMED', 
-                            patientId: newTriageId, 
-                            patientName: payload.name 
-                        }));
+            const newPatientId = 'p-' + Math.random().toString(36).substr(2, 9);
+            ws.userRole = 'patient';
+            ws.patientRoomId = newPatientId;
 
-                        // Broadcast the new card strictly to authorized clinician windows
-                        broadcast({ 
-                            type: 'NEW_TRIAGE_ADDED', 
-                            data: { id: newTriageId, patient_name: payload.name, symptoms: payload.symptoms, priority: priority }
-                        });
-                    }
+            const triageItem = {
+                id: newPatientId,
+                patient_name: payload.name,
+                symptoms: payload.symptoms,
+                priority: "ROUTINE",
+                timestamp: new Date()
+            };
+
+            triageQueue.push(triageItem);
+
+            // Confirm back to this exact patient device
+            ws.send(JSON.stringify({ type: 'INTAKE_CONFIRMED', patientId: newPatientId }));
+
+            // Broadcast new patient card to any logged-in clinicians instantly
+            activeConnections.forEach(client => {
+                if (client.readyState === WebSocket.OPEN && client.userRole === 'clinician') {
+                    client.send(JSON.stringify({ type: 'NEW_TRIAGE_ADDED', data: triageItem }));
                 }
-            );
+            });
         }
 
-        // ROUTED MESSAGING ACTION: Secure individual inbox delivery
+        // 3. Requesting chat history for an isolated room
+        if (payload.type === 'LOAD_PRIVATE_CHAT') {
+            const roomLogs = chatMessages.filter(m => m.patient_id === payload.patientId);
+            ws.send(JSON.stringify({ type: 'INITIAL_CHAT_LOAD', data: roomLogs, patientId: payload.patientId }));
+        }
+
+        // 4. Two-Way WhatsApp Message Relay
         if (payload.type === 'CHAT_MESSAGE') {
-            db.run("INSERT INTO messages (patient_id, sender, text) VALUES (?, ?, ?)", 
-                [payload.patientId, payload.sender, payload.text], 
-                function(err) {
-                    if (!err) {
-                        broadcast({ 
-                            type: 'NEW_CHAT_MESSAGE', 
-                            data: {
-                                patient_id: payload.patientId,
-                                sender: payload.sender,
-                                text: payload.text,
-                                timestamp: new Date().toISOString()
-                            }
-                        });
+            const msgObj = {
+                patient_id: payload.patientId,
+                sender: payload.sender, // 'Clinician' or 'Patient'
+                text: payload.text,
+                timestamp: new Date()
+            };
+
+            chatMessages.push(msgObj);
+
+            // Broadcast to the exact patient and clinician looking at this room
+            activeConnections.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    const isTargetClinician = (client.userRole === 'clinician');
+                    const isTargetPatient = (client.userRole === 'patient' && client.patientRoomId === payload.patientId);
+                    
+                    if (isTargetClinician || isTargetPatient) {
+                        client.send(JSON.stringify({ type: 'NEW_CHAT_MESSAGE', data: msgObj }));
                     }
                 }
-            );
+            });
         }
+    });
+
+    ws.on('close', () => {
+        activeConnections.delete(ws);
     });
 });
-
-function broadcast(data) {
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(data));
-        }
-    });
-}
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Secure server online on port ${PORT}`));
+server.listen(PORT, () => console.log(`Secure Server Active on Port ${PORT}`));
